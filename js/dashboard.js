@@ -1,7 +1,23 @@
 import { TOPICS, TOPIC, STRANDS } from './questions.js';
 import { decodeResult } from './codec.js';
+import { CONFIG } from './config.js';
 
 const KEY = 'gcsegp.pitwall.results';
+const PKEY = 'gcsegp.pitwall.key';
+const getKey = () => { try { return localStorage.getItem(PKEY) || ''; } catch { return ''; } };
+const setKey = (k) => { try { k ? localStorage.setItem(PKEY, k) : localStorage.removeItem(PKEY); } catch { /* ignore */ } };
+let remote = [];
+let remoteState = ''; // '', 'ok', 'nokey', 'badkey', 'error'
+
+async function loadRemote() {
+  if (!CONFIG.resultsEndpoint) return;
+  const key = getKey();
+  if (!key) { remoteState = 'nokey'; return; }
+  try {
+    const j = await (await fetch(`${CONFIG.resultsEndpoint}?key=${encodeURIComponent(key)}`)).json();
+    if (j.ok) { remote = j.results || []; remoteState = 'ok'; } else { remoteState = 'badkey'; }
+  } catch { remoteState = 'error'; }
+}
 const $ = document.getElementById('dash');
 const tip = document.getElementById('tip');
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -20,7 +36,7 @@ let banner = '';
 
 function all() {
   const m = new Map();
-  [...repo, ...local].forEach((r) => r && r.id && m.set(r.id, r));
+  [...repo, ...local, ...remote].forEach((r) => r && r.id && Array.isArray(r.q) && m.set(r.id, r));
   return [...m.values()].sort((a, b) => a.t0.localeCompare(b.t0));
 }
 
@@ -125,26 +141,40 @@ function drawCharts() {
   lineChart(paceEl, pts.map((p) => ({ ...p, y: p.pace })), { min: 0, max: maxPace, ticks: pt, fmt: (v) => `${v}×`, ref: 1, refLabel: 'Target pace', label: 'Pace vs target by session', tip: (p) => tipHtml(p, `${p.pace.toFixed(2)}× target time`) });
 }
 
+function keyCard() {
+  if (!CONFIG.resultsEndpoint || remoteState === 'ok') return '';
+  if (remoteState === 'error') return `<div class="banner err">Couldn't reach the results sheet. Check your connection, then <button class="btn" data-act="refresh">Try again</button></div>`;
+  return `<section class="card">
+    <h2>Connect to the results sheet</h2>
+    <p class="sub">${remoteState === 'badkey' ? 'That parent key was not accepted. ' : ''}Enter the parent key that setup() printed in Apps Script. It's saved in this browser only.</p>
+    <div class="btns"><input id="pkey" class="btn" style="flex:1;min-width:180px;text-align:left" placeholder="Parent key" autocomplete="off"><button class="btn primary" data-act="savekey">Connect</button></div>
+  </section>`;
+}
+
 function render() {
   const results = all();
   const driver = results.at(-1)?.d || 'Driver';
   if (!results.length) {
     $.innerHTML = `<header class="top"><div><h1>Pit <span>Wall</span></h1><p class="sub">GCSE GP maths telemetry</p></div></header>
-      ${banner}
+      ${banner}${keyCard()}
       <section class="card empty">
         <h2>No results yet</h2>
         <ol>
           <li>Send him the app link (<b>index.html</b> on your site).</li>
-          <li>He runs a session and taps <b>Send results</b> at the chequered flag.</li>
-          <li>Open the link he sends you. It loads straight into this page.</li>
+          ${CONFIG.resultsEndpoint
+            ? '<li>He runs a session. Results arrive here automatically, including sessions he stops part-way through.</li>'
+            : '<li>He runs a session and taps <b>Send results</b> at the chequered flag.</li><li>Open the link he sends you. It loads straight into this page.</li>'}
         </ol>
       </section>${dataCard()}`;
     return;
   }
 
   const stats = results.map((r) => ({ r, ...sessionStats(r) }));
-  const latest = stats.at(-1), prev = stats.at(-2);
-  const races = stats.filter((s) => s.r.m === 'race');
+  const finished = stats.filter((s) => s.r.status !== 'unfinished');
+  const dnf = stats.length - finished.length;
+  const chartStats = finished.length ? finished : stats;
+  const latest = chartStats.at(-1), prev = chartStats.at(-2);
+  const races = finished.filter((s) => s.r.m === 'race');
   const topics = topicStats(results);
   const focus = topics.filter((t) => t.status === 'focus' || t.status === 'slow');
   const tested = topics.filter((t) => t.status !== 'untested');
@@ -166,19 +196,19 @@ function render() {
 
   const topicRows = [...topics].sort((a, b) => ORDER.indexOf(a.status) - ORDER.indexOf(b.status) || (a.acc ?? 2) - (b.acc ?? 2));
 
-  chartData = { pts: stats.map((s) => ({ date: s.r.t1 || s.r.t0, name: `${s.r.rn} · ${s.r.sn}`, acc: s.acc, pace: s.pace, ok: s.ok, n: s.n })) };
+  chartData = { pts: chartStats.map((s) => ({ date: s.r.t1 || s.r.t0, name: `${s.r.rn} · ${s.r.sn}`, acc: s.acc, pace: s.pace, ok: s.ok, n: s.n })) };
 
   $.innerHTML = `
     <header class="top">
       <div><h1>Pit <span>Wall</span></h1><p class="sub">${esc(driver)}'s GCSE maths telemetry · ${results.length} session${results.length > 1 ? 's' : ''} logged</p></div>
-      <div class="btns"><a class="btn" href="index.html">Open his app</a></div>
+      <div class="btns">${CONFIG.resultsEndpoint ? '<button class="btn" data-act="refresh">Refresh</button>' : ''}<a class="btn" href="index.html">Open his app</a></div>
     </header>
-    ${banner}
+    ${banner}${keyCard()}
     <section class="kpis">
       <div class="kpi"><div class="label">Latest accuracy</div><div class="value">${pct(latest.acc)}</div><div class="delta">${delta(latest.acc, prev?.acc, pct, 'up')}</div></div>
       <div class="kpi"><div class="label">Latest pace vs target</div><div class="value">${latest.pace.toFixed(2)}×</div><div class="delta">${delta(latest.pace, prev?.pace, (v) => v.toFixed(2) + '×', 'down')}</div></div>
       <div class="kpi"><div class="label">Topics to focus on</div><div class="value">${focus.length}</div><div class="delta">of ${tested.length} tested · ${TOPICS.length - tested.length} not yet tested</div></div>
-      <div class="kpi"><div class="label">Race sessions done</div><div class="value">${races.length}</div><div class="delta">${stats.length - races.length} practice · ${clock(stats.reduce((a, s) => a + s.ms, 0))} on task</div></div>
+      <div class="kpi"><div class="label">Race sessions done</div><div class="value">${races.length}</div><div class="delta">${finished.length - races.length} training${dnf ? ` · <b>${dnf} DNF</b>` : ''} · ${clock(stats.reduce((a, s) => a + s.ms, 0))} on task</div></div>
     </section>
 
     <section class="grid2">
@@ -210,7 +240,7 @@ function render() {
     <section class="card">
       <h2>Sessions</h2><p class="sub">Tap one to see every question, his answer and his time</p>
       ${[...stats].reverse().map((s) => `<details class="session">
-        <summary><b>${esc(s.r.rn)} · ${esc(s.r.sn)}</b><span class="sub">${esc(fmtDateTime(s.r.t1 || s.r.t0))} · ${clock(s.ms)}</span><span class="score">${s.ok}/${s.n} · ${pct(s.acc)}</span></summary>
+        <summary><b>${esc(s.r.rn)} · ${esc(s.r.sn)}</b><span class="sub">${esc(fmtDateTime(s.r.t1 || s.r.t0))} · ${clock(s.ms)}</span>${s.r.status === 'unfinished' ? `<span class="status focus" title="Did not finish">DNF · stopped after ${s.n} of ${s.r.n || '?'}</span>` : ''}<span class="score">${s.ok}/${s.n} · ${pct(s.acc)}</span></summary>
         <div class="tablewrap qlist"><table>
           <thead><tr><th></th><th>Question</th><th>His answer</th><th>Correct</th><th class="n">Time</th></tr></thead>
           <tbody>${s.r.q.map((it) => `<tr>
@@ -230,13 +260,14 @@ function render() {
 function dataCard() {
   return `<section class="card">
     <h2>Data</h2>
-    <p class="sub">Results are saved in this browser${repo.length ? ` plus ${repo.length} from the site's data file` : ''}. To get Claude to analyse them, tap <b>Copy for Claude</b> and paste it into a chat.</p>
+    <p class="sub">${remoteState === 'ok' ? `${remote.length} result${remote.length === 1 ? '' : 's'} from your Google Sheet. ` : ''}${local.length ? `${local.length} saved in this browser. ` : ''}${repo.length ? `${repo.length} from the site's data file. ` : ''}To get Claude to analyse them, tap <b>Copy for Claude</b> and paste it into a chat.</p>
     <textarea id="paste" placeholder="Paste a results link he sent you (or exported JSON) here"></textarea>
     <div class="btns">
       <button class="btn primary" data-act="import">Add results</button>
       <button class="btn" data-act="claude">Copy for Claude</button>
       <button class="btn" data-act="export">Download JSON</button>
       ${local.length ? '<button class="btn danger" data-act="clear">Clear this browser</button>' : ''}
+      ${getKey() ? '<button class="btn danger" data-act="forgetkey">Forget parent key</button>' : ''}
     </div>
   </section>`;
 }
@@ -256,6 +287,13 @@ $.addEventListener('click', async (e) => {
     const blob = new Blob([JSON.stringify(all(), null, 1)], { type: 'application/json' });
     const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: `gcse-gp-results-${new Date().toISOString().slice(0, 10)}.json` });
     a.click();
+  } else if (act === 'savekey') {
+    setKey(document.getElementById('pkey').value.trim());
+    await loadRemote(); banner = remoteState === 'ok' ? '<div class="banner">Connected to the results sheet.</div>' : ''; render();
+  } else if (act === 'refresh') {
+    b.textContent = 'Loading…'; await loadRemote(); render();
+  } else if (act === 'forgetkey') {
+    setKey(''); remote = []; remoteState = CONFIG.resultsEndpoint ? 'nokey' : ''; render();
   } else if (act === 'clear') {
     if (confirm('Remove the results saved in this browser? (Results in the site data file stay.) Download JSON first if unsure.')) { local = []; saveLocal(local); banner = ''; render(); }
   }
@@ -266,6 +304,7 @@ window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(draw
 
 (async function init() {
   try { const r = await fetch('data/results.json', { cache: 'no-store' }); if (r.ok) repo = await r.json(); } catch { /* none yet */ }
+  await loadRemote();
   const m = location.hash.match(/r=([A-Za-z0-9_\-%]+)/);
   if (m) {
     try {

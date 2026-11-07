@@ -7,9 +7,18 @@ Racing-themed GCSE maths practice, timed like TTRS, with a parent dashboard.
 
 ## How results get back to you
 
-There's no server. At the chequered flag he taps **Send results to Dad**. That sends a WhatsApp message, email or copied link containing his results packed into the URL. When you open the link, `dashboard.html` reads the results and saves them in your browser.
+**Automatic (recommended):** every session posts to a Google Sheet you own, with no button for him to press. Sessions he abandons are sent too, marked DNF. With no signal, results are saved on his phone and sent next time he opens the app. Your dashboard reads them back using a private parent key.
 
-Results are saved per browser. To keep a permanent copy that shows on any device, give the results to Claude to add to `data/results.json`. You can also tap **Download JSON** on the dashboard.
+Setup (about 5 minutes):
+1. Create a new Google Sheet, e.g. "GCSE GP results".
+2. **Extensions → Apps Script**. Delete what's there, paste in [apps-script/Code.gs](apps-script/Code.gs), save.
+3. Pick `setup` in the function dropdown, press **Run**, and allow the permissions. Copy the **PARENT KEY** from the Execution log.
+4. **Deploy → New deployment → Web app**. Execute as: **Me**. Who has access: **Anyone**. Deploy and copy the URL ending `/exec`.
+5. Put that URL in `resultsEndpoint` in [js/config.js](js/config.js) and push. Open the dashboard and enter the parent key once.
+
+The `/exec` URL is public, because the repo is. Anyone who finds it could post junk to the sheet, but they can't read anything without the parent key, which never goes in the repo.
+
+**Manual fallback:** if `resultsEndpoint` is blank, he gets a **Send results to Dad** button instead (WhatsApp, email or copy link). The link carries the results, and opening it adds them to the dashboard in that browser.
 
 ## The monthly loop
 

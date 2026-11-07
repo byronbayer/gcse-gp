@@ -4,7 +4,8 @@ import { encodeResult } from './codec.js';
 import { CONFIG } from './config.js';
 
 // ---------- storage (wrapped: private browsing can throw) ----------
-const LS = { driver: 'gcsegp.driver', history: 'gcsegp.history' };
+const LS = { driver: 'gcsegp.driver', history: 'gcsegp.history', outbox: 'gcsegp.outbox' };
+const AUTO = !!CONFIG.resultsEndpoint; // results post automatically, no button needed
 const store = {
   get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* ignore */ } },
@@ -30,6 +31,44 @@ function currentPack() {
 function render(html) { clearTimers(); $app.innerHTML = html; window.scrollTo(0, 0); }
 const saveHistory = () => store.set(LS.history, history);
 
+// ---------- automatic results ----------
+function buildResult(r, status) {
+  return { v: 1, app: 'gcse-gp', id: r.id, d: driver.name, p: r.pack, rn: r.packTitle, s: r.session, sn: r.sname, m: r.mode,
+    status, n: r.qs.length, t0: r.t0, t1: new Date().toISOString(), q: r.items };
+}
+// Adds readable topic/strand names so the Google Sheet is easy to read
+const payload = (res) => JSON.stringify({ ...res, q: res.q.map((it) => ({ ...it, tn: TOPIC[it.k]?.name, st: STRANDS[TOPIC[it.k]?.s]?.name, tg: TOPIC[it.k]?.target })) });
+function queue(res) { const ob = store.get(LS.outbox, {}); ob[res.id] = res; store.set(LS.outbox, ob); }
+let flushing = null;
+function flush() {
+  if (!AUTO) return Promise.resolve();
+  flushing ??= (async () => {
+    for (const res of Object.values(store.get(LS.outbox, {}))) {
+      try {
+        const r = await fetch(CONFIG.resultsEndpoint, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: payload(res) });
+        if ((await r.json()).ok) {
+          const ob = store.get(LS.outbox, {});
+          if (ob[res.id]?.t1 === res.t1) { delete ob[res.id]; store.set(LS.outbox, ob); } // keep it if a newer version was queued
+          const h = history.find((x) => x.id === res.id);
+          if (h && res.status === 'finished') { h.sent = true; saveHistory(); }
+        }
+      } catch { /* offline: stays queued, retried next time */ }
+    }
+  })().finally(() => { flushing = null; });
+  return flushing;
+}
+const isQueued = (id) => !!store.get(LS.outbox, {})[id];
+// If he closes or leaves the app mid-session, send what he's done so far (marked unfinished)
+function saveUnfinished() {
+  if (!AUTO || !run || !run.items.length || run.finished) return;
+  const res = buildResult(run, 'unfinished');
+  queue(res);
+  try { navigator.sendBeacon(CONFIG.resultsEndpoint, new Blob([payload(res)], { type: 'text/plain;charset=utf-8' })); } catch { /* retried from outbox */ }
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') saveUnfinished(); });
+window.addEventListener('pagehide', saveUnfinished);
+window.addEventListener('online', () => flush());
+
 // ---------- screens ----------
 function setup() {
   render(`
@@ -49,7 +88,8 @@ function home() {
   run = null;
   const pack = currentPack();
   const pts = history.reduce((a, h) => a + (h.points || 0), 0);
-  const unsent = history.filter((h) => !h.sent);
+  const unsent = AUTO ? [] : history.filter((h) => !h.sent);
+  const waiting = AUTO ? Object.keys(store.get(LS.outbox, {})).length : 0;
   const ran = (s) => history.some((h) => h.pack === pack.id && h.session === s.id);
   const nextUp = pack.sessions.find((s) => !ran(s));
   const sessionTile = (s) => {
@@ -76,6 +116,7 @@ function home() {
     </div>
     ${unsent.length ? `<div class="card alert"><b>📤 ${unsent.length} result${unsent.length > 1 ? 's' : ''} not sent to ${esc(P)} yet.</b>
       <div class="stack" style="margin-top:10px">${unsent.slice(-3).map((h) => `<button class="btn wa block" data-act="resend" data-id="${h.id}">Send ${esc(h.sname)} (${h.correct}/${h.total})</button>`).join('')}</div></div>` : ''}
+    ${waiting ? `<p class="muted small" style="text-align:center">⏳ ${waiting} result${waiting > 1 ? 's' : ''} waiting for signal to send to ${esc(P)}.</p>` : ''}
     <section class="card">
       <h2>Round ${pack.round} · ${esc(pack.track)}</h2>
       <div class="round-title">${esc(driver.name)}'s race weekend</div>
@@ -100,7 +141,7 @@ function how() {
       <p>🧮 means a calculator is allowed (like Paper 2 and 3). 🧠 means do it in your head or on paper (like Paper 1).</p>
       <p>Stuck? Hit <b>Skip</b>. A skip tells us more than a guess does.</p>
       <p>At the flag you get your sectors: <span style="color:var(--purple)">purple</span> = personal best, <span style="color:var(--green)">green</span> = solid, <span style="color:var(--yellow)">yellow</span> = time to find there.</p>
-      <p>Send your results to ${esc(P)} at the end. That's how the next round gets built around where you're losing time.</p>
+      <p>${AUTO ? `Your results go to ${esc(P)}'s pit wall automatically, including sessions you don't finish.` : `Send your results to ${esc(P)} at the end.`} That's how the next round gets built around where you're losing time.</p>
     </section>
     <button class="btn go block" data-act="home">Back to pit lane</button>`);
 }
@@ -126,7 +167,7 @@ function startPractice(strand) {
 }
 
 function begin(r) {
-  run = { ...r, i: 0, items: [], t0: new Date().toISOString(), input: '', locked: true };
+  run = { ...r, id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), i: 0, items: [], t0: new Date().toISOString(), input: '', locked: true };
   lights(() => showQ());
 }
 
@@ -249,6 +290,7 @@ function next() {
 
 async function finish() {
   const r = run;
+  r.finished = true;
   const items = r.items;
   const correct = items.filter((i) => i.ok).length;
   const totalMs = items.reduce((a, i) => a + i.ms, 0);
@@ -260,8 +302,9 @@ async function finish() {
   const prevBest = {};
   history.forEach((h) => Object.entries(h.strands || {}).forEach(([s, v]) => { prevBest[s] = Math.max(prevBest[s] ?? 0, v.c / v.t); }));
 
-  const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  const result = { v: 1, id, d: driver.name, p: r.pack, rn: r.packTitle, s: r.session, sn: r.sname, m: r.mode, t0: r.t0, t1: new Date().toISOString(), q: items };
+  const id = r.id;
+  const result = buildResult(r, 'finished');
+  if (AUTO) queue(result);
   const code = await encodeResult(result);
   const entry = { id, pack: r.pack, title: r.packTitle, session: r.session, sname: r.sname, mode: r.mode, date: result.t1, correct, total: items.length, ms: totalMs, points, strands, code, sent: false };
   history.push(entry);
@@ -295,19 +338,27 @@ async function finish() {
         <div><b style="color:var(--amber)">+${points}</b><span>Points</span></div>
       </div>
     </section>
-    <section class="card stack">
+    ${AUTO ? `<section class="card"><p id="sync" style="margin:0;text-align:center">📡 Sending to ${esc(P)}'s pit wall…</p></section>` : `<section class="card stack">
       <button class="btn wa block" data-act="send" data-id="${id}">📤 Send results to ${esc(P)}</button>
       <div class="row">
         <button class="btn ghost" data-act="email" data-id="${id}">Email</button>
         <button class="btn ghost" data-act="copy" data-id="${id}">Copy link</button>
       </div>
-    </section>
+    </section>`}
     <section class="card"><h2>Sectors</h2>${sectors}</section>
     <section class="card"><h2>Debrief${misses.length ? ` · ${misses.length} to review` : ''}</h2>${debrief}</section>
     <button class="btn ghost block" data-act="home">Back to pit lane</button>`);
+
+  if (AUTO) {
+    await flush();
+    const el = document.getElementById('sync');
+    if (el) el.innerHTML = isQueued(id)
+      ? `⏳ No signal right now. Results are saved and will send automatically next time you open the app.`
+      : `<span style="color:var(--green)">✓ Results sent to ${esc(P)}'s pit wall</span>`;
+  }
 }
 
-// ---------- sending results ----------
+// ---------- sending results (manual fallback, only when no resultsEndpoint is set) ----------
 const resultUrl = (h) => new URL(CONFIG.dashboardPath, location.href.split('#')[0]).href.split('?')[0] + '#r=' + h.code;
 const shareText = (h) => `🏁 ${driver.name}: ${h.title} ${h.sname}. ${h.correct}/${h.total} in ${clock(h.ms)}. Telemetry:`;
 function markSent(h) { h.sent = true; saveHistory(); }
@@ -385,3 +436,4 @@ document.addEventListener('keydown', (e) => {
 });
 
 if (driver) home(); else setup();
+flush().then(() => { if (driver && !run && $app.querySelector('.round-title')) home(); });

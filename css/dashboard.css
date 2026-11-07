@@ -70,7 +70,7 @@ header.top { display: flex; justify-content: space-between; align-items: end; ga
 .tip b { font-size: 15px; }
 .tip .m { color: var(--text-2); }
 .bars { display: grid; gap: 10px; }
-.barrow { display: grid; grid-template-columns: 120px 1fr 64px; align-items: center; gap: 10px; font-size: 14px; }
+.barrow { display: grid; grid-template-columns: 110px 1fr auto; align-items: center; gap: 10px; font-size: 14px; }
 .barrow .track { height: 14px; background: var(--surface-2); border-radius: 4px; overflow: hidden; }
 .barrow .fill { height: 100%; background: var(--series); border-radius: 0 4px 4px 0; }
 .barrow .v { text-align: right; font-variant-numeric: tabular-nums; color: var(--text-2); }
