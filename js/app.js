@@ -1,4 +1,4 @@
-import { TOPICS, STRANDS, QUICKFIRE_IDS, makeQuestion, checkAnswer, parseAnswer, shuffle } from './questions.js';
+import { TOPICS, TOPIC, STRANDS, QUICKFIRE_IDS, makeQuestion, checkAnswer, parseAnswer, shuffle, orderByDifficulty } from './questions.js';
 import { PACKS, CURRENT } from './packs.js';
 import { encodeResult } from './codec.js';
 import { CONFIG } from './config.js';
@@ -50,15 +50,18 @@ function home() {
   const pack = currentPack();
   const pts = history.reduce((a, h) => a + (h.points || 0), 0);
   const unsent = history.filter((h) => !h.sent);
+  const ran = (s) => history.some((h) => h.pack === pack.id && h.session === s.id);
+  const nextUp = pack.sessions.find((s) => !ran(s));
   const sessionTile = (s) => {
     const done = history.filter((h) => h.pack === pack.id && h.session === s.id);
     const best = done.reduce((b, h) => (!b || h.correct / h.total > b.correct / b.total ? h : b), null);
     const n = s.kind === 'quickfire' ? s.count : s.topics.length;
-    const mins = s.kind === 'quickfire' ? 2 : Math.round((n * 45) / 60);
-    return `<button class="session" data-act="start" data-session="${s.id}">
+    const mins = s.kind === 'quickfire' ? 2 : Math.max(1, Math.round(s.topics.reduce((a, id) => a + TOPIC[id].target, 0) / 60));
+    const status = best ? `<b>✓ ${best.correct}/${best.total}</b>best` : s === nextUp ? '<b style="color:var(--amber)">Next up</b>' : 'Not run';
+    return `<button class="session" data-act="start" data-session="${s.id}"${s === nextUp ? ' style="border-color:var(--amber)"' : ''}>
       <span class="ico">${s.kind === 'quickfire' ? '⏱️' : '🏎️'}</span>
       <span><span class="t">${esc(s.name)}</span><br><span class="m">${n} laps · ~${mins} min · ${esc(s.blurb || '')}</span></span>
-      <span class="st">${best ? `<b>✓ ${best.correct}/${best.total}</b>best` : 'Not run'}</span>
+      <span class="st">${status}</span>
     </button>`;
   };
   const practice = Object.entries(STRANDS).map(([k, v]) => {
@@ -80,8 +83,8 @@ function home() {
       ${pack.sessions.map(sessionTile).join('')}
     </section>
     <section class="card">
-      <h2>Free practice</h2>
-      <p class="muted small" style="margin:0">Pick a strand and get some laps in. You can send these to ${esc(P)} too.</p>
+      <h2>Training</h2>
+      <p class="muted small" style="margin:0">Pick a strand and get some extra laps in, easiest first. You can send these to ${esc(P)} too.</p>
       <div class="strand-grid">${practice}</div>
     </section>
     <p style="text-align:center"><button class="link" data-act="how">How it works</button> · <button class="link" data-act="rename">Change driver</button></p>`);
@@ -92,7 +95,7 @@ function how() {
     <div class="brand"><span class="flag"></span>GCSE <em>GP</em></div>
     <section class="card stack">
       <h2>How it works</h2>
-      <p>Each <b>round</b> is a race weekend: <b>Qualifying</b> (quickfire mental maths) then <b>Race 1</b> and <b>Race 2</b> (GCSE questions).</p>
+      <p>Each <b>round</b> is a race weekend: <b>Free Practice</b> (quickfire mental maths), then <b>Quali 1</b>, <b>Quali 2</b> and the <b>Race</b>. Each session is harder than the last, and inside each one the questions start easy and build up.</p>
       <p>Every question is timed. Points: <b>10</b> for a correct answer, <b>+5</b> if you beat the target time.</p>
       <p>🧮 means a calculator is allowed (like Paper 2 and 3). 🧠 means do it in your head or on paper (like Paper 1).</p>
       <p>Stuck? Hit <b>Skip</b>. A skip tells us more than a guess does.</p>
@@ -109,7 +112,7 @@ function startSession(sessionId) {
   const quick = s.kind === 'quickfire';
   const qs = quick
     ? Array.from({ length: s.count }, () => makeQuestion(QUICKFIRE_IDS[Math.floor(Math.random() * QUICKFIRE_IDS.length)]))
-    : shuffle(s.topics).map(makeQuestion);
+    : orderByDifficulty(s.topics).map(makeQuestion);
   begin({ mode: 'race', pack: pack.id, packTitle: pack.title, session: s.id, sname: s.name, quick, qs });
 }
 
@@ -119,7 +122,7 @@ function startPractice(strand) {
   const n = quick ? 20 : 10;
   let pool = [];
   while (pool.length < n) pool = pool.concat(shuffle(ids));
-  begin({ mode: 'practice', pack: 'practice', packTitle: 'Free practice', session: `practice-${strand}`, sname: `Practice: ${STRANDS[strand].name}`, quick, qs: pool.slice(0, n).map(makeQuestion) });
+  begin({ mode: 'practice', pack: 'practice', packTitle: 'Training', session: `practice-${strand}`, sname: `Training: ${STRANDS[strand].name}`, quick, qs: orderByDifficulty(pool.slice(0, n)).map(makeQuestion) });
 }
 
 function begin(r) {

@@ -2,7 +2,7 @@
 
 Racing-themed GCSE maths practice, timed like TTRS, with a parent dashboard.
 
-- **index.html**: his app (phone or PC). Race weekends: Qualifying (quickfire), Race 1, Race 2, plus Free Practice by strand.
+- **index.html**: his app (phone or PC). Each race weekend runs easiest to hardest: Free Practice (quickfire), Quali 1, Quali 2, Race. Inside each session the questions also start easy and build up (Foundation before Higher, then by target time). There's also Training by strand.
 - **dashboard.html**: the Pit Wall. Accuracy and pace over time, strand breakdown, topics ranked weakest first, every answer he gave.
 
 ## How results get back to you

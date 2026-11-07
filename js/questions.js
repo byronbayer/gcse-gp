@@ -377,6 +377,13 @@ export const TOPICS = [
 export const TOPIC = Object.fromEntries(TOPICS.map((t) => [t.id, t]));
 export const QUICKFIRE_IDS = TOPICS.filter((t) => t.s === 'Q').map((t) => t.id);
 
+// Easiest first: Foundation before Higher, then shorter target time first.
+// Topics of equal difficulty are shuffled so the order isn't identical every time.
+export function orderByDifficulty(ids) {
+  const key = (id) => (TOPIC[id].tier === 'H' ? 1000 : 0) + TOPIC[id].target;
+  return shuffle(ids).sort((a, b) => key(a) - key(b));
+}
+
 export function makeQuestion(id) {
   const t = TOPIC[id];
   const q = t.gen();
